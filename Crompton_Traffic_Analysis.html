@@ -799,14 +799,14 @@
 // GitHub Configuration
 const GITHUB_CONFIG = {
     username: 'crsanju',
-    repo: 'Crompton_Traffic_Analysis',
-    branch: '0783406e6671dbff6222cf7b8dd545bddf4972b7',
+    repo: 'Cromton_Traffic_Analysis',
+    branch: '828cc3faa7d44bdc483d06def9af6c9f1c409ed5',
     tmrDataFile: 'tmr.geojson',
-    goldCoastDataFile: 'goldcoast.geojson'  // Updated to match actual filename
+    goldCoastDataFile: 'goldcoast.geojson'
 };
 
 const GITHUB_TMR_URL = `https://raw.githubusercontent.com/${GITHUB_CONFIG.username}/${GITHUB_CONFIG.repo}/${GITHUB_CONFIG.branch}/${GITHUB_CONFIG.tmrDataFile}`;
-const GITHUB_GOLDCOAST_URL = 'https://raw.githubusercontent.com/crsanju/Crompton_Traffic_Analysis/refs/heads/main/goldcoast.geojson';
+const GITHUB_GOLDCOAST_URL = 'https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/refs/heads/main/goldcoast.geojson';
 
 // Fetch data from GitHub
 async function fetchGitHubData(url) {
@@ -2031,7 +2031,7 @@ function showError(message) {
 
         if (typeof ipswichDataGlobal === 'undefined' || !ipswichDataGlobal) {
             try {
-                const response = await fetch('https://raw.githubusercontent.com/crsanju/Crompton_Traffic_Analysis/refs/heads/main/Ipswich.geojson');
+                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/refs/heads/main/Ipswich.geojson');
                 const rawText = await response.text();
                 ipswichDataGlobal = safeParseJson(rawText);
             } catch (error) {
@@ -2041,7 +2041,7 @@ function showError(message) {
 
         if (typeof loganDataGlobal === 'undefined' || !loganDataGlobal) {
             try {
-                const response = await fetch('https://raw.githubusercontent.com/crsanju/Crompton_Traffic_Analysis/c65e49414183ab58e8244f6de5611eece0e9cd83/logan.geojson');
+                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/828cc3faa7d44bdc483d06def9af6c9f1c409ed5/logan.geojson');
                 loganDataGlobal = await response.json();
             } catch (error) {
                 console.error('Failed to load Logan data for smart search:', error);
@@ -2275,7 +2275,7 @@ function showError(message) {
 
         if (ipswichDataGlobal.length === 0) {
             try {
-                const response = await fetch('https://raw.githubusercontent.com/crsanju/Crompton_Traffic_Analysis/refs/heads/main/Ipswich.geojson');
+                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/refs/heads/main/Ipswich.geojson');
                 const rawText = await response.text();
                 const parsed = safeParseJson(rawText);
                 ipswichDataGlobal = parsed.features ? parsed.features : parsed;
@@ -2556,7 +2556,7 @@ function showError(message) {
         if (!loganDataGlobal) {
             try {
                 // Using the specific GitHub URL provided
-                const response = await fetch('https://raw.githubusercontent.com/crsanju/Crompton_Traffic_Analysis/c65e49414183ab58e8244f6de5611eece0e9cd83/logan.geojson');
+                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/828cc3faa7d44bdc483d06def9af6c9f1c409ed5/logan.geojson');
                 loganDataGlobal = await response.json();
                 
                 populateLoganMap();
