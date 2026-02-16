@@ -2097,6 +2097,7 @@ function showError(message) {
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const rawText = await response.text();
                 ipswichDataGlobal = safeParseJson(rawText);
+         
                 console.log('✓ Ipswich data loaded');
             } catch (error) {
                 console.error('✗ Failed to load Ipswich data:', error);
