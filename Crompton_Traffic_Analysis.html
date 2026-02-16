@@ -152,6 +152,9 @@
         .tab-content.active { display: block; }
         @keyframes fadeEffect { from {opacity: 0;} to {opacity: 1;} }
 
+        /* Loader for GeoJSON */
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #0056b3; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; margin-left: 10px; }
+
         /* LOS Colors */
         .los-a { background-color: #00eb00; color: black; }
         .los-b { background-color: #92d050; color: black; }
@@ -342,6 +345,7 @@
         <button class="tab-button active" onclick="openTab(event, 'tab-hourly')">TMR Roads</button>
         <button class="tab-button" onclick="openTab(event, 'tab-aadt')">Custom TIA</button>
         <button class="tab-button" onclick="openTab(event, 'tab-tia')">Gold coast</button>
+        <button class="tab-button" onclick="openTab(event, 'tab-toowoomba')">Toowoomba</button>
         <button class="tab-button" onclick="openTab(event, 'Ipswich')">Ipswich Analysis</button>
         <button class="tab-button" onclick="openTab(event, 'Logan')">Logan Analysis</button>
     </div>
@@ -627,6 +631,7 @@
                 <p style="font-size:0.85em; margin-top:5px; color: #666;">
                     💡 <strong>Tip:</strong> Click any marker on the map above to auto-fill TIA inputs OR manually enter values in the form
                 </p>
+                <div class="map-info" id="tiaQueueMapStatus">Select a site and run TIA to show the 5-min queue indicator on the map.</div>
             </div>
         </div>
     </div>
@@ -831,9 +836,85 @@
     </div>
 </div>
 
+<div id="tab-toowoomba" class="tab-content">
+    <h1>Toowoomba Traffic Counts</h1>
+
+    <div class="card">
+        <h3>1. Data Source</h3>
+        <div style="display: flex; gap: 10px; align-items: flex-end;">
+            <div style="flex-grow: 1;">
+                <label>GeoJSON URL:</label>
+                <input type="text" id="geoJsonUrl" value="https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/refs/heads/main/toowoomba.geojson">
+            </div>
+            <button style="width: auto;" onclick="loadGeoJson()">Load Data</button>
+        </div>
+        <div id="geoJsonStatus" style="margin-top: 10px;"></div>
+
+        <div id="twSiteSelectDiv" class="hidden" style="margin-top: 15px;">
+            <label>Select Site (Filtered from GeoJSON):</label>
+            <select id="twSiteSelect" onchange="updateTwSiteInfo()"></select>
+            <div id="twSiteInfo" style="margin-top: 10px; padding: 10px; background: #eef; border-radius: 4px;"></div>
+        </div>
+    </div>
+
+    <div id="twParams" class="hidden card">
+        <h3>2. TIA Parameters</h3>
+        <div class="params-grid">
+            <div><label>ADT (Count):</label><input type="number" id="twAdt" readonly></div>
+            <div><label>Road Type:</label><select id="twRoadType"></select></div>
+            <div><label>Count Year:</label><input type="number" id="twCountYear" value="2021"></div>
+            <div><label>Target Year:</label><input type="number" id="twTargetYear" value="2025"></div>
+        </div>
+        <div class="params-grid">
+            <div><label>Growth (%):</label><input type="number" id="twGrowth" value="2.5" step="0.1"></div>
+            <div><label>CV (%):</label><input type="number" id="twCv" value="13" step="1"></div>
+            <div><label>Lanes:</label><input type="number" id="twLanes" value="1"></div>
+        </div>
+        <button onclick="calcToowoomba()">Calculate Queue</button>
+    </div>
+
+    <div id="twResults" class="hidden">
+        <div class="grid">
+            <div class="card">
+                <h3>3. Volume Estimation</h3>
+                <table id="twVolTable">
+                    <thead><tr><th>Metric</th><th>Peak (AM)</th><th>Off-Peak</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="card">
+                <h3>4. Queue Estimation (Target Year)</h3>
+                <table class="detail-table" id="twQueueTable">
+                    <thead><tr><th>Duration</th><th>Peak Queue (m)</th><th>Off-Peak Queue (m)</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+
 <!-- TMR Traffic Data loaded from GitHub -->
 
 <script>
+// Meta Data from your CSV
+const dowFactors = {
+    "Urban arterial 1 (Capital City)": {"Mon": 0.98}, "Urban arterial 1 (Other)": {"Mon": 1.01},
+    "Urban arterial 2 (Capital City)": {"Mon": 0.99}, "Urban arterial 2 (Others)": {"Mon": 1},
+    "Urban CBD (Capital City)": {"Mon": 1.02}, "Urban industrial (Others)": {"Mon": 0.85},
+    "Rural urban fringe": {"Mon": 1.14}, "Rural strategic 1": {"Mon": 1.05},
+    "Rural strategic 2": {"Mon": 1.11}, "Rural recreation summer": {"Mon": 1.07}, "Rural recreation winter": {"Mon": 1.15}
+};
+
+const partDayFactors = {
+    "Urban arterial (Capital City)": {"7-9am": 5.63}, "Urban arterial (Others)": {"7-9am": 7.31},
+    "Urban CBD (Capital City)": {"7-9am": 7.86}, "Urban industrial (Others)": {"7-9am": 5.57},
+    "Rural urban fringe": {"7-9am": 8.61}, "Rural strategic 1": {"7-9am": 8.4},
+    "Rural strategic 2": {"7-9am": 10.2}, "Rural recreation summer": {"7-9am": 16.9}, "Rural recreation winter": {"7-9am": 13.8}
+};
+
+let twGeoData = null;
+
 // GitHub Configuration
 const GITHUB_CONFIG = {
     username: 'crsanju',
@@ -920,6 +1001,119 @@ function showError(message) {
             clearTimeout(timeout);
             timeout = setTimeout(later, wait);
         };
+    }
+
+    // Initialize Dropdown
+    (function initTw() {
+        const rtSelect = document.getElementById('twRoadType');
+        if (!rtSelect) return;
+        for (const rt in dowFactors) {
+            const opt = document.createElement('option');
+            opt.value = rt;
+            opt.textContent = rt;
+            rtSelect.appendChild(opt);
+        }
+    })();
+
+    // Load Data
+    async function loadGeoJson() {
+        const url = document.getElementById('geoJsonUrl').value;
+        const status = document.getElementById('geoJsonStatus');
+        status.innerHTML = '<span class="loader"></span> Loading...';
+        try {
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error("Network response was not ok");
+            const data = await resp.json();
+            twGeoData = data;
+            status.innerHTML = `<span style="color:green">Success! Loaded ${data.features.length} sites.</span>`;
+            
+            const sel = document.getElementById('twSiteSelect');
+            sel.innerHTML = '<option value="">Select a site...</option>';
+            twGeoData.features.forEach((f, i) => {
+                const props = f.properties;
+                const name = props.Road_Name || props.ROAD_NAME || props.Street || `Site ${i}`;
+                const loc = props.Location || props.Count_Location || '';
+                const opt = document.createElement('option');
+                opt.value = i;
+                opt.textContent = `${name} - ${loc}`;
+                sel.appendChild(opt);
+            });
+            document.getElementById('twSiteSelectDiv').classList.remove('hidden');
+        } catch (e) {
+            status.innerHTML = `<span style="color:red">Error: ${e.message}</span>`;
+        }
+    }
+
+    // Update UI on Site Select
+    function updateTwSiteInfo() {
+        const idx = document.getElementById('twSiteSelect').value;
+        if (idx === "") { document.getElementById('twParams').classList.add('hidden'); return; }
+        
+        const props = twGeoData.features[idx].properties;
+        let html = '<strong>Properties:</strong><br>';
+        for(const k in props) html += `${k}: ${props[k]}<br>`;
+        document.getElementById('twSiteInfo').innerHTML = html;
+        
+        document.getElementById('twAdt').value = props.ADT || props.adt || 0;
+        
+        // Attempt to auto-select Road Type and Year
+        const rt = props.Road_Type || props.ROAD_TYPE || '';
+        const rtSelect = document.getElementById('twRoadType');
+        for(let i=0; i<rtSelect.options.length; i++) {
+            if (rtSelect.options[i].value === rt) { rtSelect.selectedIndex = i; break; }
+        }
+        const date = props.Count_Date || props.COUNT_DATE;
+        if (date) {
+            const y = new Date(date).getFullYear();
+            if(!isNaN(y)) document.getElementById('twCountYear').value = y;
+        }
+        document.getElementById('twParams').classList.remove('hidden');
+    }
+
+    // Calculate Function
+    function calcToowoomba() {
+        const adt = parseFloat(document.getElementById('twAdt').value);
+        const cy = parseFloat(document.getElementById('twCountYear').value);
+        const ty = parseFloat(document.getElementById('twTargetYear').value);
+        const gr = parseFloat(document.getElementById('twGrowth').value);
+        const cvPct = parseFloat(document.getElementById('twCv').value);
+        const lanes = parseFloat(document.getElementById('twLanes').value);
+        
+        const years = Math.max(0, ty - cy);
+        const aadtFut = adt * Math.pow(1 + gr/100, years);
+
+        const kFactor = 0.13;
+        const dFactor = 0.50;
+        const peakHr = aadtFut * kFactor * dFactor;
+        const offPeakHr = Math.max(0, Math.floor((aadtFut - (peakHr * 2)) / 22));
+
+        document.querySelector('#twVolTable tbody').innerHTML = `
+            <tr><td>Hourly Vol (Total)</td><td>${Math.round(peakHr)}</td><td>${offPeakHr}</td></tr>
+            <tr><td>Hourly Vol (Per Lane)</td><td>${Math.round(peakHr/lanes)}</td><td>${Math.round(offPeakHr/lanes)}</td></tr>
+        `;
+
+        const hvPercent = Math.max(0, cvPct) / 100;
+        const calcQ = (volHr) => {
+            const vehPerMin = volHr / 60;
+            const durations = [2, 5, 10, 15];
+            return durations.map(mins => {
+                const totalVeh = Math.ceil((vehPerMin * mins) / lanes);
+                const nHv = Math.ceil(totalVeh * hvPercent);
+                const nCar = Math.max(0, totalVeh - nHv);
+                return (nCar * 7) + (nHv * 18);
+            });
+        };
+
+        const pQ = calcQ(peakHr);
+        const oQ = calcQ(offPeakHr);
+
+        document.querySelector('#twQueueTable tbody').innerHTML = `
+            <tr><td>2 min</td><td>${Math.round(pQ[0])}</td><td>${Math.round(oQ[0])}</td></tr>
+            <tr><td>5 min</td><td>${Math.round(pQ[1])}</td><td>${Math.round(oQ[1])}</td></tr>
+            <tr><td>10 min</td><td>${Math.round(pQ[2])}</td><td>${Math.round(oQ[2])}</td></tr>
+            <tr><td>15 min</td><td>${Math.round(pQ[3])}</td><td>${Math.round(oQ[3])}</td></tr>
+        `;
+        document.getElementById('twResults').classList.remove('hidden');
     }
 
     async function getEmbeddedTmrRawData() {
@@ -1784,6 +1978,7 @@ function showError(message) {
         const avgLen = ((100 - hv)/100 * 7.0) + (hv/100 * 13.0);
 
         // Multipliers from Excel TIA
+        let queue5mMeters = 0;
         const multipliers = [
             { id: 'q_2m', m: 2.4 },
             { id: 'q_5m', m: 6.0 },
@@ -1807,9 +2002,15 @@ function showError(message) {
             // Heuristic:
             const qCalc = vol5min * item.m; // This gives "Vehicles" roughly
             const qMeters = qCalc * avgLen;
+
+            if (item.id === 'q_5m') {
+                queue5mMeters = qMeters;
+            }
             
             document.getElementById(item.id).innerText = Math.round(qMeters).toLocaleString();
         });
+
+        updateTiaQueueOverlay(queue5mMeters);
     }
 
     // 2. Map & Embedded GeoJSON Loader
@@ -1817,6 +2018,8 @@ function showError(message) {
     let embeddedGeoLayer;
     let gcSiteLayers = {};
     let selectedGcSiteId = null;
+    let tiaSelectedLatLng = null;
+    let tiaQueueOverlay = null;
 
     // ===== CONFIGURATION: External GeoJSON URL =====
     // To use Google Drive:
@@ -1906,6 +2109,71 @@ function showError(message) {
         layer.openPopup();
     }
 
+    function clearTiaQueueOverlay() {
+        if (map && tiaQueueOverlay) {
+            map.removeLayer(tiaQueueOverlay);
+            tiaQueueOverlay = null;
+        }
+    }
+
+    function offsetLatLng(lat, lng, meters, bearingDeg) {
+        const R = 6378137;
+        const bearing = (bearingDeg * Math.PI) / 180;
+        const lat1 = (lat * Math.PI) / 180;
+        const lon1 = (lng * Math.PI) / 180;
+        const dr = meters / R;
+
+        const lat2 = Math.asin(
+            Math.sin(lat1) * Math.cos(dr) +
+            Math.cos(lat1) * Math.sin(dr) * Math.cos(bearing)
+        );
+        const lon2 = lon1 + Math.atan2(
+            Math.sin(bearing) * Math.sin(dr) * Math.cos(lat1),
+            Math.cos(dr) - Math.sin(lat1) * Math.sin(lat2)
+        );
+
+        return {
+            lat: (lat2 * 180) / Math.PI,
+            lng: (lon2 * 180) / Math.PI
+        };
+    }
+
+    function updateTiaQueueOverlay(queueMeters) {
+        const status = document.getElementById('tiaQueueMapStatus');
+        if (!map || !tiaSelectedLatLng) {
+            if (status) {
+                status.textContent = 'Select a site and run TIA to show the 5-min queue indicator on the map.';
+            }
+            return;
+        }
+
+        const queueLen = Math.max(0, Number(queueMeters) || 0);
+        clearTiaQueueOverlay();
+
+        const start = tiaSelectedLatLng;
+        const end = offsetLatLng(start.lat, start.lng, queueLen, 90);
+
+        const line = L.polyline([start, end], {
+            color: '#d36b2c',
+            weight: 5,
+            opacity: 0.85,
+            dashArray: '8 6'
+        });
+
+        const endMarker = L.circleMarker(end, {
+            radius: 6,
+            color: '#d36b2c',
+            fillColor: '#d36b2c',
+            fillOpacity: 0.9
+        });
+
+        tiaQueueOverlay = L.layerGroup([line, endMarker]).addTo(map);
+
+        if (status) {
+            status.textContent = `Queue indicator shown on map (5 min = ${Math.round(queueLen)} m).`;
+        }
+    }
+
     async function loadEmbeddedGeoJSON() {
         try {
             initMap();
@@ -1951,6 +2219,10 @@ function showError(message) {
         }
         if (Number.isFinite(Number(surveyYear))) {
             document.getElementById('tia_year_data').value = surveyYear;
+        }
+        const layer = gcSiteLayers[String(siteId)];
+        if (layer && typeof layer.getLatLng === 'function') {
+            tiaSelectedLatLng = layer.getLatLng();
         }
         // Switch tab
         document.querySelector("button[onclick*='tab-tia']").click();
