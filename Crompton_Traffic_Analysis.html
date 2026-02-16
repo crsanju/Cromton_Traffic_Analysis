@@ -249,6 +249,19 @@
         .search-status { margin-top: 15px; height: 20px; font-size: 0.9em; color: #f4c35e; }
         .hidden-overlay { opacity: 0; pointer-events: none; }
 
+        #mismatchPanel .landing-content {
+            color: #1c1c1c;
+        }
+
+        #mismatchPanel label {
+            color: #1c1c1c;
+        }
+
+        #mismatchPanel input {
+            background: #ffffff;
+            color: #1c1c1c;
+        }
+
         .map-link { color: var(--brand-2); text-decoration: none; font-weight: 700; }
         .map-link:hover { text-decoration: underline; }
 
@@ -285,6 +298,31 @@
         </div>
 
         <div id="searchStatus" class="search-status"></div>
+    </div>
+</div>
+
+<div id="mismatchPanel" class="landing-overlay hidden-overlay">
+    <div class="landing-content">
+        <h1>Road Not In Database</h1>
+        <p id="mismatchSummary">We could not find this road in the database.</p>
+
+        <div class="params-grid" style="grid-template-columns: 1fr 1fr; gap: 12px; text-align: left;">
+            <div>
+                <label for="mismatchPercent">Percent of known road volume (%)</label>
+                <input type="number" id="mismatchPercent" value="100" min="0" step="1">
+            </div>
+            <div>
+                <label for="mismatchHouseholds">Total number of households</label>
+                <input type="number" id="mismatchHouseholds" value="0" min="0" step="1">
+            </div>
+        </div>
+
+        <div class="search-status" id="mismatchResult"></div>
+
+        <div class="quick-actions">
+            <button class="action-btn secondary" onclick="applyMismatchInputs()">Use Custom TIA</button>
+            <button class="action-btn outline" onclick="closeMismatchPanel()">Cancel</button>
+        </div>
     </div>
 </div>
 
@@ -805,8 +843,8 @@ const GITHUB_CONFIG = {
     goldCoastDataFile: 'goldcoast.geojson'
 };
 
-const GITHUB_TMR_URL = `https://raw.githubusercontent.com/${GITHUB_CONFIG.username}/${GITHUB_CONFIG.repo}/${GITHUB_CONFIG.branch}/${GITHUB_CONFIG.tmrDataFile}`;
-const GITHUB_GOLDCOAST_URL = 'https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/refs/heads/main/goldcoast.geojson';
+const GITHUB_TMR_URL = `https://raw.githubusercontent.com/${GITHUB_CONFIG.username}/${GITHUB_CONFIG.repo}/main/${GITHUB_CONFIG.tmrDataFile}`;
+const GITHUB_GOLDCOAST_URL = 'https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/main/goldcoast.geojson';
 
 // Fetch data from GitHub
 async function fetchGitHubData(url) {
@@ -1000,7 +1038,7 @@ function showError(message) {
             
             // Parse hour range (e.g., "0 to 1" -> hour 0)
             const hourMatch = hours.match(/^(\d+)\s+to\s+(\d+)$/);
-            if (hourMatch) {
+            if (hourMatch && sites[siteId].directions[direction]) {
                 const hourIndex = parseInt(hourMatch[1]);
                 if (hourIndex >= 0 && hourIndex < 24) {
                     sites[siteId].directions[direction][hourIndex] = weekdayAvg;
@@ -1018,13 +1056,35 @@ function showError(message) {
     let hourlySiteMarkers = {};
     let selectedHourlySiteId = null;
 
+    function addTileLayerWithFallback(targetMap, primaryUrl, primaryOptions, fallbackUrl, fallbackOptions) {
+        const primaryLayer = L.tileLayer(primaryUrl, primaryOptions);
+        const fallbackLayer = L.tileLayer(fallbackUrl, fallbackOptions);
+        let errorCount = 0;
+        let fallbackAdded = false;
+
+        primaryLayer.on('tileerror', () => {
+            errorCount += 1;
+            if (!fallbackAdded && errorCount >= 5) {
+                fallbackAdded = true;
+                targetMap.addLayer(fallbackLayer);
+                targetMap.removeLayer(primaryLayer);
+            }
+        });
+
+        primaryLayer.addTo(targetMap);
+    }
+
     function initHourlyMap() {
         if (hourlyMap) return;
 
         hourlyMap = L.map('map').setView([-28.00, 153.40], 10);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap contributors'
-        }).addTo(hourlyMap);
+        addTileLayerWithFallback(
+            hourlyMap,
+            'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            { attribution: '&copy; OpenStreetMap contributors' },
+            'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+            { attribution: '&copy; OpenStreetMap contributors &copy; CARTO' }
+        );
     }
 
     function resetSelectedHourlyMarker() {
@@ -1318,6 +1378,7 @@ function showError(message) {
     
     // Initial call
     updateYears();
+    updateAadtCap();
 
     let chartInstance = null;
 
@@ -1862,11 +1923,13 @@ function showError(message) {
         map = L.map('interactiveMap').setView([-28.00, 153.40], 11);
         
         // Add OpenStreetMap tiles
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap contributors'
-        }).addTo(map);
-
-        loadEmbeddedGeoJSON();
+        addTileLayerWithFallback(
+            map,
+            'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            { attribution: '&copy; OpenStreetMap contributors' },
+            'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+            { attribution: '&copy; OpenStreetMap contributors &copy; CARTO' }
+        );
     }
 
     // Helper to fill TIA form from Gold Coast Map
@@ -1959,7 +2022,7 @@ function showError(message) {
         // Lazy initialize maps only when needed
         if(tabName === 'tab-tia' && !goldCoastMapInitialized) {
             goldCoastMapInitialized = true;
-            setTimeout(initMap, 100);
+            setTimeout(loadEmbeddedGeoJSON, 100);
         } else if (tabName === 'tab-tia' && map) {
             map.invalidateSize();
         }
@@ -1996,9 +2059,7 @@ function showError(message) {
     const originalLoadGeo = window.loadEmbeddedGeoJSON;
     window.loadEmbeddedGeoJSON = async function() {
         try {
-            // Call original init map logic
-            if(!map) initMap(); 
-            
+            initMap();
             const geoData = await getEmbeddedGeoJSON();
             window.goldCoastDataRaw = geoData; // Store globally for search
             renderGeoJSONOnMap(geoData);
@@ -2031,7 +2092,7 @@ function showError(message) {
 
         if (typeof ipswichDataGlobal === 'undefined' || !ipswichDataGlobal) {
             try {
-                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/refs/heads/main/Ipswich.geojson');
+                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/main/Ipswich.geojson');
                 const rawText = await response.text();
                 ipswichDataGlobal = safeParseJson(rawText);
             } catch (error) {
@@ -2041,7 +2102,7 @@ function showError(message) {
 
         if (typeof loganDataGlobal === 'undefined' || !loganDataGlobal) {
             try {
-                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/828cc3faa7d44bdc483d06def9af6c9f1c409ed5/logan.geojson');
+                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/main/logan.geojson');
                 loganDataGlobal = await response.json();
             } catch (error) {
                 console.error('Failed to load Logan data for smart search:', error);
@@ -2050,44 +2111,137 @@ function showError(message) {
     }
 
     // 3. Main Search Logic
+    const MAPS_CO_API_KEY = '';
+    const IS_FILE_ORIGIN = window.location.protocol === 'file:';
+    const HOUSEHOLD_TRIP_RATE = 2.5 * 4.5;
+
+    function normalizeSearchQuery(raw) {
+        return String(raw || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function parseCoordinates(raw) {
+        const text = normalizeSearchQuery(raw);
+        const match = text.match(/^(-?\d+(?:\.\d+)?)[,;\s]+(-?\d+(?:\.\d+)?)$/);
+        if (!match) return null;
+
+        const lat = parseFloat(match[1]);
+        const lon = parseFloat(match[2]);
+        if (Number.isNaN(lat) || Number.isNaN(lon)) return null;
+        if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+        return { lat, lon, roadName: null };
+    }
+
+    async function geocodeWithNominatim(query) {
+        try {
+            if (IS_FILE_ORIGIN) return null;
+            const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&countrycodes=au&q=${encodeURIComponent(query)}`;
+            const response = await fetch(url, {
+                headers: {
+                    'Accept-Language': 'en-AU,en;q=0.9'
+                }
+            });
+
+            if (!response.ok) return null;
+            const data = await response.json();
+            if (!Array.isArray(data) || data.length === 0) return null;
+
+            const address = data[0].address || {};
+            const roadName = address.road || address.pedestrian || address.footway || address.cycleway || address.neighbourhood || null;
+            return {
+                lat: parseFloat(data[0].lat),
+                lon: parseFloat(data[0].lon),
+                roadName: roadName
+            };
+        } catch (error) {
+            console.warn('Nominatim geocoding failed:', error);
+            return null;
+        }
+    }
+
+    async function geocodeWithMapsCo(query) {
+        try {
+            if (!MAPS_CO_API_KEY) return null;
+            const url = `https://geocode.maps.co/search?q=${encodeURIComponent(query)}&country=au&api_key=${encodeURIComponent(MAPS_CO_API_KEY)}`;
+            const response = await fetch(url);
+            if (!response.ok) return null;
+            const data = await response.json();
+            if (!Array.isArray(data) || data.length === 0) return null;
+            const address = data[0].address || {};
+            const roadName = address.road || address.pedestrian || address.neighbourhood || null;
+            return {
+                lat: parseFloat(data[0].lat),
+                lon: parseFloat(data[0].lon),
+                roadName: roadName
+            };
+        } catch (error) {
+            console.warn('Maps.co geocoding failed:', error);
+            return null;
+        }
+    }
+
+    async function geocodeWithPhoton(query) {
+        try {
+            const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5&lang=en&lat=-27.4698&lon=153.0251`;
+            const response = await fetch(url);
+            if (!response.ok) return null;
+            const data = await response.json();
+            const feature = data && data.features && data.features[0];
+            const coords = feature && feature.geometry && feature.geometry.coordinates;
+            if (!coords || coords.length < 2) return null;
+            const props = feature.properties || {};
+            const roadName = props.street || props.name || props.locality || null;
+            return { lat: coords[1], lon: coords[0], roadName: roadName };
+        } catch (error) {
+            console.warn('Photon geocoding failed:', error);
+            return null;
+        }
+    }
+
+    async function geocodeLocation(query) {
+        const normalized = normalizeSearchQuery(query);
+        if (!normalized) return null;
+
+        const directCoords = parseCoordinates(normalized);
+        if (directCoords) return directCoords;
+
+        const photon = await geocodeWithPhoton(`${normalized} Australia`);
+        if (photon) return photon;
+
+        const mapsCo = await geocodeWithMapsCo(`${normalized} Australia`);
+        if (mapsCo) return mapsCo;
+
+        const nominatim = await geocodeWithNominatim(`${normalized} Australia`);
+        if (nominatim) return nominatim;
+
+        return await geocodeWithPhoton(`${normalized} Australia`);
+    }
+
     async function executeSmartSearch() {
         const query = document.getElementById('landingSearchInput').value;
-        if (!query) return updateStatus("Please enter a location.");
+        if (!normalizeSearchQuery(query)) return updateStatus("Please enter a location.");
 
         updateStatus("🔍 Locating...");
 
         try {
-            let lat, lon;
+            const coords = await geocodeLocation(query);
 
-            // Check if input is coordinates (e.g., "-28.123, 153.456")
-            const coordMatch = query.match(/^(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)$/);
-            
-            if (coordMatch) {
-                lat = parseFloat(coordMatch[1]);
-                lon = parseFloat(coordMatch[3]);
-            } else {
-                // Geocode Address using OpenStreetMap (Nominatim)
-                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query + ' Queensland Australia')}`);
-                const data = await response.json();
-                
-                if (data && data.length > 0) {
-                    lat = parseFloat(data[0].lat);
-                    lon = parseFloat(data[0].lon);
-                } else {
-                    return updateStatus("❌ Location not found. Try a broader search.");
-                }
+            if (!coords) {
+                return updateStatus("❌ Location not found. Try a broader search or add suburb/state.");
             }
 
             updateStatus("📍 Location found. Finding nearest traffic site...");
-            
+
             // Ensure data is loaded
             await ensureSearchDataLoaded();
-            
-            findNearestAndRedirect(lat, lon);
+
+            findNearestAndRedirect(coords.lat, coords.lon, coords.roadName);
 
         } catch (error) {
             console.error(error);
-            updateStatus("⚠️ Error occurred during search.");
+            const message = error && error.message ? error.message : 'Unknown error';
+            updateStatus(`⚠️ Search failed: ${message}`);
         }
     }
 
@@ -2122,7 +2276,139 @@ function showError(message) {
     function deg2rad(deg) { return deg * (Math.PI/180); }
 
     // 5. Nearest Neighbor Logic
-    function findNearestAndRedirect(targetLat, targetLon) {
+    function normalizeRoadName(value) {
+        return String(value || '')
+            .replace(/[^a-z0-9\s]/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+    }
+
+    function roadMatches(queryRoad, candidateRoad) {
+        const query = normalizeRoadName(queryRoad);
+        const candidate = normalizeRoadName(candidateRoad);
+        if (!query || !candidate) return false;
+        return candidate.includes(query) || query.includes(candidate);
+    }
+
+    function getSiteRoadName(sourceType, nearestSite) {
+        if (!nearestSite) return '';
+        if (sourceType === 'TMR') {
+            return nearestSite.road_name || nearestSite.description || '';
+        }
+        const props = nearestSite.properties || {};
+        if (sourceType === 'GC') {
+            return props.STREET || props.Road_Name || props.ROAD_NAME || props.Location || '';
+        }
+        if (sourceType === 'IPSWICH') {
+            return props["Road Name"] || props.Description || props.ROAD_NAME || props.Road_Name || props.STREET || props.Location || props.SITE_LOCATION || '';
+        }
+        if (sourceType === 'LOGAN') {
+            return props.STREET_NAME || props.RoadName || props.ROAD_NAME || props.STREET || props.COUNTER_LOCATION_BETWEEN || props.COMMENTS || '';
+        }
+        return '';
+    }
+
+    function getSiteAadt(sourceType, nearestSite) {
+        if (!nearestSite) return 0;
+        if (sourceType === 'TMR') {
+            const gazData = nearestSite.directions && nearestSite.directions['GAZETTAL'] ? nearestSite.directions['GAZETTAL'] : [];
+            const agData = nearestSite.directions && nearestSite.directions['AGAINST GAZETTAL'] ? nearestSite.directions['AGAINST GAZETTAL'] : [];
+            const totalDaily = gazData.reduce((sum, val) => sum + (Number(val) || 0), 0) +
+                agData.reduce((sum, val) => sum + (Number(val) || 0), 0);
+            return Math.round(totalDaily);
+        }
+
+        const props = nearestSite.properties || {};
+        if (sourceType === 'GC') {
+            const vpdRaw = props.VPD ?? props.ADT ?? props.AADT;
+            return Number.isFinite(Number(vpdRaw)) ? Number(vpdRaw) : 0;
+        }
+        if (sourceType === 'IPSWICH') {
+            let aadt = props["Average Daily Traffic Adt Vehicles Per Day"] || props.ADT || props.AADT || 0;
+            if (!aadt || aadt === 0) {
+                const am = props["Weekday Avg AM Peak Flow Vehicles Per Hour"] || 0;
+                const pm = props["Weekday Avg PM Peak Flow Vehicles Per Hour"] || 0;
+                const maxPeak = Math.max(am, pm);
+                if (maxPeak > 0) aadt = maxPeak * 10;
+            }
+            return Number(aadt) || 0;
+        }
+        if (sourceType === 'LOGAN') {
+            let aadt = props.AADT ?? props.ADT ?? props.AAWT ?? props.Volume;
+            if (aadt == null || isNaN(aadt)) {
+                const vol1 = Number(props.VOL1 || 0);
+                const vol2 = Number(props.VOL2 || 0);
+                aadt = (isNaN(vol1) ? 0 : vol1) + (isNaN(vol2) ? 0 : vol2);
+            }
+            return Number(aadt) || 0;
+        }
+        return 0;
+    }
+
+    let mismatchContext = null;
+
+    function showMismatchPanel(queryRoadName, sourceType, nearestSite) {
+        if (!queryRoadName) return false;
+        const siteRoad = getSiteRoadName(sourceType, nearestSite);
+        if (!siteRoad) return false;
+        if (roadMatches(queryRoadName, siteRoad)) return false;
+
+        mismatchContext = {
+            queryRoadName: queryRoadName,
+            sourceType: sourceType,
+            nearestSite: nearestSite,
+            baseAadt: getSiteAadt(sourceType, nearestSite),
+            siteRoad: siteRoad
+        };
+
+        const summary = document.getElementById('mismatchSummary');
+        summary.textContent = `"${queryRoadName}" is not in the database. Nearest known road: ${siteRoad}.`;
+
+        document.getElementById('mismatchPercent').value = 100;
+        document.getElementById('mismatchHouseholds').value = 0;
+        document.getElementById('mismatchResult').textContent = '';
+
+        document.getElementById('mismatchPanel').classList.remove('hidden-overlay');
+        return true;
+    }
+
+    function closeMismatchPanel() {
+        document.getElementById('mismatchPanel').classList.add('hidden-overlay');
+        mismatchContext = null;
+    }
+
+    function applyMismatchInputs() {
+        if (!mismatchContext) return;
+
+        let percent = parseFloat(document.getElementById('mismatchPercent').value);
+        if (!Number.isFinite(percent) || percent < 0) percent = 100;
+
+        let households = parseFloat(document.getElementById('mismatchHouseholds').value);
+        if (!Number.isFinite(households) || households < 0) households = 0;
+
+        const percentAadt = mismatchContext.baseAadt * (percent / 100);
+        const manualAadt = households * HOUSEHOLD_TRIP_RATE;
+        const chosenAadt = Math.max(percentAadt, manualAadt);
+
+        if (Math.abs(percentAadt - manualAadt) > 500) {
+            document.getElementById('mismatchResult').textContent = 'Warning: Difference between AADT and manual calculation is greater than 500.';
+        } else {
+            document.getElementById('mismatchResult').textContent = '';
+        }
+
+        closeMismatchPanel();
+        closeLandingPage();
+
+        document.querySelector("button[onclick*='tab-aadt']").click();
+        const aadtInput = document.getElementById('aadt_val');
+        if (aadtInput) {
+            aadtInput.value = Math.round(chosenAadt);
+        }
+        calculateAADTLogic();
+    }
+
+    function findNearestAndRedirect(targetLat, targetLon, queryRoadName) {
         let nearestSite = null;
         let minDistance = Infinity;
         let sourceType = ''; // 'TMR' or 'GC'
@@ -2143,8 +2429,11 @@ function showError(message) {
         // B. Search Gold Coast Data (window.goldCoastDataRaw)
         if (window.goldCoastDataRaw && window.goldCoastDataRaw.features) {
             window.goldCoastDataRaw.features.forEach(feature => {
+                const geometry = feature && feature.geometry;
+                const coords = geometry && Array.isArray(geometry.coordinates) ? geometry.coordinates : null;
+                if (!coords || coords.length < 2) return;
+
                 // GeoJSON uses [Long, Lat]
-                const coords = feature.geometry.coordinates;
                 const dist = getDistanceFromLatLonInKm(targetLat, targetLon, coords[1], coords[0]);
                 
                 if (dist < minDistance) {
@@ -2173,20 +2462,25 @@ function showError(message) {
         // D. Search Logan Data
         if (typeof loganDataGlobal !== 'undefined' && loganDataGlobal && loganDataGlobal.features) {
             loganDataGlobal.features.forEach(feature => {
-                const coords = feature.geometry.coordinates; // [Lon, Lat]
-                if (coords) {
-                    const dist = getDistanceFromLatLonInKm(targetLat, targetLon, coords[1], coords[0]);
-                    if (dist < minDistance) {
-                        minDistance = dist;
-                        nearestSite = feature;
-                        sourceType = 'LOGAN';
-                    }
+                const geometry = feature && feature.geometry;
+                const coords = geometry && Array.isArray(geometry.coordinates) ? geometry.coordinates : null;
+                if (!coords || coords.length < 2) return;
+
+                const dist = getDistanceFromLatLonInKm(targetLat, targetLon, coords[1], coords[0]);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    nearestSite = feature;
+                    sourceType = 'LOGAN';
                 }
             });
         }
 
         // C. Redirect User
         if (nearestSite) {
+            if (showMismatchPanel(queryRoadName, sourceType, nearestSite)) {
+                return;
+            }
+
             closeLandingPage();
             
             if (sourceType === 'TMR') {
@@ -2226,9 +2520,11 @@ function showError(message) {
                     alert(`Nearest Site Found (${minDistance.toFixed(2)}km away):\nGold Coast Site: ${street}`);
                     
                     // Center map on the site
-                    if(map) {
+                    if(map && nearestSite.geometry && Array.isArray(nearestSite.geometry.coordinates)) {
                         const coords = nearestSite.geometry.coordinates;
-                        map.setView([coords[1], coords[0]], 15);
+                        if (coords.length >= 2) {
+                            map.setView([coords[1], coords[0]], 15);
+                        }
                     }
 
                     highlightGcSite(siteId);
@@ -2268,9 +2564,13 @@ function showError(message) {
     async function initIpswich() {
         if (!ipswichMapInstance) {
             ipswichMapInstance = L.map('ipswichMap').setView([-27.6144, 152.7608], 12);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; OpenStreetMap'
-            }).addTo(ipswichMapInstance);
+            addTileLayerWithFallback(
+                ipswichMapInstance,
+                'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                { attribution: '&copy; OpenStreetMap contributors' },
+                'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+                { attribution: '&copy; OpenStreetMap contributors &copy; CARTO' }
+            );
         }
 
         if (ipswichDataGlobal.length === 0) {
@@ -2547,16 +2847,20 @@ function showError(message) {
         // 1. Initialize Map
         if (!loganMapInstance) {
             loganMapInstance = L.map('loganMap').setView([-27.64, 153.10], 11); // Center on Logan
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
-            }).addTo(loganMapInstance);
+            addTileLayerWithFallback(
+                loganMapInstance,
+                'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                { attribution: '&copy; OpenStreetMap contributors' },
+                'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+                { attribution: '&copy; OpenStreetMap contributors &copy; CARTO' }
+            );
         }
 
         // 2. Fetch Data
         if (!loganDataGlobal) {
             try {
-                // Using the specific GitHub URL provided
-                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/828cc3faa7d44bdc483d06def9af6c9f1c409ed5/logan.geojson');
+                // Using the main branch for consistency
+                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/main/logan.geojson');
                 loganDataGlobal = await response.json();
                 
                 populateLoganMap();
