@@ -2092,20 +2092,31 @@ function showError(message) {
 
         if (typeof ipswichDataGlobal === 'undefined' || !ipswichDataGlobal) {
             try {
+                console.log('Loading Ipswich data...');
                 const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/main/Ipswich.geojson');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const rawText = await response.text();
                 ipswichDataGlobal = safeParseJson(rawText);
+                console.log('✓ Ipswich data loaded');
             } catch (error) {
-                console.error('Failed to load Ipswich data for smart search:', error);
+                console.error('✗ Failed to load Ipswich data:', error);
             }
         }
 
         if (typeof loganDataGlobal === 'undefined' || !loganDataGlobal) {
             try {
-                const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/main/logan.geojson');
+                const url = 'https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/main/logan.geojson';
+                console.log('Loading Logan data from:', url);
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: File not found at ${url}`);
+                }
                 loganDataGlobal = await response.json();
+                console.log('✓ Logan data loaded successfully:', loganDataGlobal.features ? loganDataGlobal.features.length : 0, 'features');
             } catch (error) {
-                console.error('Failed to load Logan data for smart search:', error);
+                console.error('✗ Failed to load Logan data:', error);
+                console.warn('Using empty Logan dataset as fallback');
+                loganDataGlobal = { type: 'FeatureCollection', features: [] };
             }
         }
     }
@@ -2861,13 +2872,17 @@ function showError(message) {
             try {
                 // Using the main branch for consistency
                 const response = await fetch('https://raw.githubusercontent.com/crsanju/Cromton_Traffic_Analysis/main/logan.geojson');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: logan.geojson not found on GitHub main branch. Verify file exists and check filename case.`);
+                }
                 loganDataGlobal = await response.json();
+                console.log('Logan data loaded from GitHub');
                 
                 populateLoganMap();
                 populateLoganList();
             } catch (error) {
                 console.error("Error loading Logan data:", error);
-                alert("Could not load Logan GeoJSON data.");
+                alert("⚠️ Could not load Logan data from GitHub.\n\nPlease check:\n1. File 'logan.geojson' exists in your GitHub repo\n2. Repository is PUBLIC\n3. File is in the 'main' branch\n\nError: " + error.message);
             }
         }
         
