@@ -6714,21 +6714,30 @@ function showError(message) {
                 
                 // Extract Coordinates (GeoJSON is [Lon, Lat])
                 if (geom && geom.coordinates) {
-                    const lat = geom.coordinates[1];
-                    const lon = geom.coordinates[0];
+                    let lat, lon;
+                    if (geom.type === 'Point') {
+                        lon = geom.coordinates[0];
+                        lat = geom.coordinates[1];
+                    } else if (geom.type === 'LineString' && geom.coordinates.length > 0) {
+                        const midIdx = Math.floor(geom.coordinates.length / 2);
+                        lon = geom.coordinates[midIdx][0];
+                        lat = geom.coordinates[midIdx][1];
+                    }
 
-                    const marker = L.circleMarker([lat, lon], {
-                        radius: 5,
-                        fillColor: "#28a745", // Green for Logan
-                        color: "#fff",
-                        weight: 1,
-                        opacity: 1,
-                        fillOpacity: 0.8
-                    });
+                    if (lat && lon) {
+                        const marker = L.circleMarker([lat, lon], {
+                            radius: 5,
+                            fillColor: "#28a745", // Green for Logan
+                            color: "#fff",
+                            weight: 1,
+                            opacity: 1,
+                            fillOpacity: 0.8
+                        });
 
-                    marker.bindPopup(`<b>${name}</b><br>ID: ${id}<br><button onclick="selectLoganSite('${id}')">Analyze</button>`);
-                    marker.on('click', () => selectLoganSite(id));
-                    loganLayerGroup.addLayer(marker);
+                        marker.bindPopup(`<b>${name}</b><br>ID: ${id}<br><button onclick="selectLoganSite('${id}')">Analyze</button>`);
+                        marker.on('click', () => selectLoganSite(id));
+                        loganLayerGroup.addLayer(marker);
+                    }
                 }
             });
             loganLayerGroup.addTo(loganMapInstance);
@@ -6867,9 +6876,20 @@ function showError(message) {
         document.getElementById('loganInputHV').value = Number(hv).toFixed(1);
 
         // Zoom Map
-        const coords = currentLoganFeature.geometry.coordinates;
-        if (coords) {
-            loganMapInstance.setView([coords[1], coords[0]], 15);
+        const geom = currentLoganFeature.geometry;
+        if (geom && geom.coordinates) {
+            let lat, lon;
+            if (geom.type === 'Point') {
+                lon = geom.coordinates[0];
+                lat = geom.coordinates[1];
+            } else if (geom.type === 'LineString' && geom.coordinates.length > 0) {
+                const midIdx = Math.floor(geom.coordinates.length / 2);
+                lon = geom.coordinates[midIdx][0];
+                lat = geom.coordinates[midIdx][1];
+            }
+            if (lat && lon) {
+                loganMapInstance.setView([lat, lon], 15);
+            }
         }
 
         updateLoganAnalysis();
@@ -7249,7 +7269,6 @@ function showError(message) {
     }
 
     function updateLoganAnalysis() {
-        // Get Inputs
         const baseAADT = parseFloat(document.getElementById('loganInputAADT').value) || 0;
         const baseYear = parseInt(document.getElementById('loganBaseYear').innerText);
         const targetYear = parseInt(document.getElementById('loganTargetYear').value);
@@ -7257,106 +7276,273 @@ function showError(message) {
         const hvPercent = parseFloat(document.getElementById('loganInputHV').value) / 100;
         const analysisPct = parseFloat(document.getElementById('loganAnalysisPct').value) / 100;
 
-        // 1. PROJECT AADT (Logan Formula)
         const years = Math.max(0, targetYear - baseYear);
         const projectedAADT = baseAADT * Math.pow((1 + growthRate), years);
-        
-        // Apply "Analysis Road" Percentage (e.g. if analyzing a different road)
         const finalAADT = projectedAADT * analysisPct;
 
-        // 2. PEAK HOUR CALCULATION (Logan 80th Highest Hour Formula)
-        // Excel: Peak = (AADT_direction * 15%) * 85%
-        const peakHourBothDir = (finalAADT * 0.15) * 0.85;
-        
-        // Assuming equal traffic each way
-        const totalLanes = 2; // Two-way road assumption
-        const peakHourOneDir = peakHourBothDir / totalLanes;
-        
-        // 3. OFF-PEAK HOUR CALCULATION (Logan Formula)
-        // Excel: Off-peak = ((AADT - Peak) * 15%) * 42%
-        const offPeakBothDir = ((finalAADT - peakHourBothDir) * 0.15) * 0.42;
-        const offPeakOneDir = offPeakBothDir / totalLanes;
+        const peakHour80th = (finalAADT * 0.15) * 0.85;
+        const offPeakHour = ((finalAADT - peakHour80th) * 0.15) * 0.45;
 
-        // 4. VOLUME PER LANE AND 5-MINUTE CALCULATION
-        const lanes = 1; // Per direction
-        const volPerLane = peakHourOneDir / lanes;
-        const vol5MinPerLane = volPerLane / 12;     // 5-minute arrival rate per lane
-
-        // 5. SPLIT INTO LV AND HV
+        const lanes = 1;
+        const hourlyPerLane = peakHour80th / lanes;
+        const vol5MinPerLane = hourlyPerLane / 12;
+        const volLV = vol5MinPerLane * (1 - hvPercent);
         const volHV = vol5MinPerLane * hvPercent;
-        const volLV = vol5MinPerLane - volHV;
 
-        // 6. QUEUE LENGTH CALCULATION (TMR Formula)
-        const factors = [
-            { min: 2,  lvFactor: 2.4, hvFactor: 8 },
-            { min: 5,  lvFactor: 6,   hvFactor: 20 },
-            { min: 10, lvFactor: 12,  hvFactor: 40 },
-            { min: 15, lvFactor: 18,  hvFactor: 60 }
-        ];
-
-        let queueHtml = "";
-
-        factors.forEach(f => {
-            // Calculate Queue Length in Meters using TMR factors
-            const qLength = (volLV * f.lvFactor) + (volHV * f.hvFactor);
-            const totalVeh = Math.ceil(vol5MinPerLane * (f.min / 5)); // For display only
-
-            queueHtml += `
-            <tr>
-                <td>${f.min} min</td>
-                <td>${totalVeh}</td>
-                <td style="color:${getColorForQueue(qLength)}">${Math.round(qLength)} m</td>
-            </tr>
-        `;
-        });
-
-        // 7. DESIGN CAPACITY CALCULATION (Logan Formula)
-        // Excel: =IF(ROUNDUP((0.15*AADT)/2,0)<=500, 500, ROUNDUP((0.15*AADT)/2,0))
-        // This uses a reference daily limit from Logan standards
-        const referenceLimit = 10000; // Logan Two Lane Urban limit
-        const calc30thHour = Math.round((0.15 * referenceLimit) / 2);
+        const dayLimit = 750;
+        const calc30thHour = Math.round((0.15 * dayLimit) / 2);
         const designCapacity = Math.max(calc30thHour, 500);
-        
-        // Update capacity field to show auto-calculated value
+
         document.getElementById('loganCapacity').value = designCapacity;
 
-        // 8. VCR CALCULATION (Logan: Peak hour volume / Capacity)
-        // Excel shows VCR per direction
-        const vcr = peakHourOneDir / designCapacity;
-        
-        let los = "A";
-        let losColor = "#2ecc71";
+        const vcr = peakHour80th / designCapacity;
 
-        // Logan LOS Thresholds
-        if (vcr <= 0.60) { los = "A"; losColor = "#2ecc71"; }
-        else if (vcr <= 0.70) { los = "B"; losColor = "#27ae60"; }
-        else if (vcr <= 0.90) { los = "C"; losColor = "#f1c40f"; }
-        else if (vcr <= 0.95) { los = "D"; losColor = "#e67e22"; }
-        else { los = "E/F"; losColor = "#e74c3c"; }
+        let los = "F";
+        let losClass = "los-f";
+        if (vcr <= 0.60) { los = "A"; losClass = "los-a"; }
+        else if (vcr <= 0.70) { los = "B"; losClass = "los-b"; }
+        else if (vcr <= 0.90) { los = "C"; losClass = "los-c"; }
+        else if (vcr <= 0.95) { los = "D"; losClass = "los-d"; }
+        else if (vcr <= 1.00) { los = "E"; losClass = "los-e"; }
 
-        // 9. UPDATE DISPLAY
         document.getElementById('loganResAADT').innerText = Math.round(finalAADT).toLocaleString();
-        document.getElementById('loganResPeakFlow').innerText = Math.round(peakHourOneDir) + " vph";
-        document.getElementById('loganResVCR').innerText = vcr.toFixed(2);
+        document.getElementById('loganResPeakFlow').innerText = Math.round(peakHour80th).toLocaleString() + ' veh/hr';
+        document.getElementById('loganResVCR').innerText = vcr.toFixed(3);
 
-        const losEl = document.getElementById('loganResLOS');
-        losEl.innerText = los;
-        losEl.style.color = losColor;
+        const badge = document.getElementById('loganResLOS');
+        if (badge) {
+            badge.innerText = "LOS " + los;
+            badge.className = "";
+            badge.classList.add(losClass);
+            badge.style.padding = "5px 10px";
+            badge.style.borderRadius = "4px";
+            badge.style.fontWeight = "bold";
+        }
 
-        document.getElementById('loganResQueueTable').innerHTML = queueHtml;
+        const resultsSection = document.getElementById('loganResultsSection');
+        if (resultsSection) {
+            resultsSection.open = true;
+        }
+
+        buildLoganDirectionalQueues(peakHour80th, offPeakHour, hvPercent, lanes);
+        buildLoganTrafficImpactAnalysis(peakHour80th, offPeakHour, designCapacity, lanes);
 
         // Pass data to unified calculation system
         const roadName = document.getElementById('loganSelectedName').innerText || 'Logan Site';
         passToCalculations_Manual(
             roadName,
             baseAADT,
-            1, // Per direction lanes
+            lanes,
             parseFloat(document.getElementById('loganInputHV').value) || 20.4,
-            0, // Right turn %
+            0,
             baseYear,
             parseFloat(document.getElementById('loganInputGrowth').value) || 2.5,
             targetYear
         );
+    }
+
+    function buildLoganDirectionalQueues(peakHour, offPeakHour, cvRatio, laneCount) {
+        const section = document.getElementById('loganQueueSection');
+        const contentElement = document.getElementById('loganQueueContent');
+
+        if (!section || !contentElement) return;
+
+        const directionLabels = ['Direction 1', 'Direction 2'];
+        const directionPeakHour = peakHour / 2;
+        const directionOffPeakHour = offPeakHour / 2;
+
+        function buildDirectionalQueue(directionLabel, dirPeakHour, dirOffPeakHour, cvRatio, laneCount) {
+            const hourlyPeak = dirPeakHour;
+            const hourlyPeakCv = hourlyPeak * cvRatio;
+            const hourlyOffPeak = dirOffPeakHour;
+            const hourlyOffPeakCv = hourlyOffPeak * cvRatio;
+
+            const hourlyPeakPerLane = hourlyPeak / laneCount;
+            const hourlyPeakCvPerLane = hourlyPeakCv / laneCount;
+            const hourlyOffPeakPerLane = hourlyOffPeak / laneCount;
+            const hourlyOffPeakCvPerLane = hourlyOffPeakCv / laneCount;
+
+            const peakVol5 = hourlyPeakPerLane / 12;
+            const peakCvVol5 = hourlyPeakCvPerLane / 12;
+            const offPeakVol5 = hourlyOffPeakPerLane / 12;
+            const offPeakCvVol5 = hourlyOffPeakCvPerLane / 12;
+
+            function queueLength(volume5Total, volume5Cv, lvFactor, hvFactor) {
+                return (volume5Total * lvFactor) + (volume5Cv * hvFactor);
+            }
+
+            const q2Peak = queueLength(peakVol5, peakCvVol5, 2.4, 8);
+            const q5Peak = queueLength(peakVol5, peakCvVol5, 6, 20);
+            const q10Peak = queueLength(peakVol5, peakCvVol5, 12, 40);
+            const q15Peak = queueLength(peakVol5, peakCvVol5, 18, 60);
+
+            const q2Off = queueLength(offPeakVol5, offPeakCvVol5, 2.4, 8);
+            const q5Off = queueLength(offPeakVol5, offPeakCvVol5, 6, 20);
+            const q10Off = queueLength(offPeakVol5, offPeakCvVol5, 12, 40);
+            const q15Off = queueLength(offPeakVol5, offPeakCvVol5, 18, 60);
+
+            return `
+                <div style="margin:15px 0; padding:15px; background:#f8f9fa; border-radius:8px; border:1px solid #dee2e6;">
+                    <h4 style="margin:0 0 15px 0; color:#1f5e63;">Queue Length Estimation: Logan - ${directionLabel}</h4>
+                    <table style="width:100%; border-collapse:collapse; font-size:0.88em;">
+                        <tr style="background:#f4f6f8; font-weight:bold;">
+                            <td style="padding:8px; border:1px solid #ddd;" colspan="2"></td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:center;">80th Highest Hour<br>(Peak traffic estimate)</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:center;">CV</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:center;">Off-peak traffic<br>(Estimated Highest Hour - 45% of remaining volume)</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:center;">CV</td>
+                        </tr>
+                        <tr>
+                            <td style="padding:8px; border:1px solid #ddd; font-weight:bold;" colspan="2">Hourly Average</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(hourlyPeak).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(hourlyPeakCv).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(hourlyOffPeak).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(hourlyOffPeakCv).toLocaleString()}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding:8px; border:1px solid #ddd; font-weight:bold;" colspan="2">Hourly Average per Lane</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(hourlyPeakPerLane).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(hourlyPeakCvPerLane).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(hourlyOffPeakPerLane).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(hourlyOffPeakCvPerLane).toLocaleString()}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding:8px; border:1px solid #ddd; font-weight:bold;" colspan="2">Queue length estimation</td>
+                            <td style="padding:8px; border:1px solid #ddd;" colspan="4"></td>
+                        </tr>
+                        <tr>
+                            <td style="padding:8px; border:1px solid #ddd;">Volume</td>
+                            <td style="padding:8px; border:1px solid #ddd;">per 5 mins</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(peakVol5).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(peakCvVol5).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(offPeakVol5).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(offPeakCvVol5).toLocaleString()}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding:8px; border:1px solid #ddd;">2 mins. Queue</td>
+                            <td style="padding:8px; border:1px solid #ddd;">Length (m)</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(q2Peak).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"></td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right; background:#cfe8b3;">${Math.round(q2Off).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"></td>
+                        </tr>
+                        <tr>
+                            <td style="padding:8px; border:1px solid #ddd;">5 mins. Queue</td>
+                            <td style="padding:8px; border:1px solid #ddd;">Length (m)</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(q5Peak).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"></td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(q5Off).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"></td>
+                        </tr>
+                        <tr>
+                            <td style="padding:8px; border:1px solid #ddd;">10 mins. Queue</td>
+                            <td style="padding:8px; border:1px solid #ddd;">Length (m)</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(q10Peak).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"></td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(q10Off).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"></td>
+                        </tr>
+                        <tr>
+                            <td style="padding:8px; border:1px solid #ddd;">15 mins. Queue</td>
+                            <td style="padding:8px; border:1px solid #ddd;">Length (m)</td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(q15Peak).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"></td>
+                            <td style="padding:8px; border:1px solid #ddd; text-align:right;">${Math.round(q15Off).toLocaleString()}</td>
+                            <td style="padding:8px; border:1px solid #ddd;"></td>
+                        </tr>
+                    </table>
+                </div>
+            `;
+        }
+
+        const html = buildDirectionalQueue(directionLabels[0], directionPeakHour, directionOffPeakHour, cvRatio, laneCount) +
+                     buildDirectionalQueue(directionLabels[1], directionPeakHour, directionOffPeakHour, cvRatio, laneCount);
+
+        contentElement.innerHTML = html;
+        section.open = true;
+    }
+
+    function buildLoganTrafficImpactAnalysis(peakHour, offPeakHour, designCap, laneCount) {
+        const section = document.getElementById('loganImpactSection');
+        const contentElement = document.getElementById('loganImpactContent');
+        const placeholder = document.getElementById('loganImpactPlaceholder');
+
+        if (!section || !contentElement) return;
+
+        if (placeholder) placeholder.style.display = 'none';
+        contentElement.style.display = 'block';
+
+        const dirPeakHour = peakHour / 2;
+        const dirOffPeakHour = offPeakHour / 2;
+
+        function getVcrClass(vcr) {
+            if (vcr === 'N/A') return '';
+            if (vcr <= 0.60) return 'los-a';
+            if (vcr <= 0.70) return 'los-b';
+            if (vcr <= 0.90) return 'los-c';
+            if (vcr <= 0.95) return 'los-d';
+            if (vcr <= 1.00) return 'los-e';
+            return 'los-f';
+        }
+
+        function formatVcr(vcr) {
+            return vcr === 'N/A' ? 'N/A' : vcr.toFixed(2);
+        }
+
+        const scenarios = [
+            {
+                label: 'Direction 1',
+                peak: dirPeakHour / designCap,
+                offPeak: dirOffPeakHour / designCap
+            },
+            {
+                label: 'Direction 2',
+                peak: dirPeakHour / designCap,
+                offPeak: dirOffPeakHour / designCap
+            },
+            {
+                label: '1 Lane Closure Direction 1',
+                peak: laneCount > 1 ? (dirPeakHour / (laneCount - 1)) / designCap : 'N/A',
+                offPeak: laneCount > 1 ? (dirOffPeakHour / (laneCount - 1)) / designCap : 'N/A'
+            },
+            {
+                label: '1 Lane Closure Direction 2',
+                peak: laneCount > 1 ? (dirPeakHour / (laneCount - 1)) / designCap : 'N/A',
+                offPeak: laneCount > 1 ? (dirOffPeakHour / (laneCount - 1)) / designCap : 'N/A'
+            },
+            {
+                label: 'Single Lane Reversible Flow',
+                peak: (dirPeakHour * 2) / designCap,
+                offPeak: (dirOffPeakHour * 2) / designCap
+            }
+        ];
+
+        const html = `
+            <table style="width:100%; border-collapse:collapse; font-size:0.9em;">
+                <tr style="background:#f4f6f8; font-weight:bold;">
+                    <td style="padding:8px; border:1px solid #ddd; font-weight:bold;">Design Volume (Capacity) *</td>
+                    <td style="padding:8px; border:1px solid #ddd; text-align:center;">${Math.round(designCap).toLocaleString()}</td>
+                    <td style="padding:8px; border:1px solid #ddd;" colspan="2"></td>
+                </tr>
+                <tr style="background:#f4f6f8; font-weight:bold;">
+                    <td style="padding:8px; border:1px solid #ddd;">VCR (Degrees of Saturation)</td>
+                    <td style="padding:8px; border:1px solid #ddd;"></td>
+                    <td style="padding:8px; border:1px solid #ddd; text-align:center;">Peak</td>
+                    <td style="padding:8px; border:1px solid #ddd; text-align:center;">Off-Peak</td>
+                </tr>
+                ${scenarios.map(s => `
+                    <tr>
+                        <td style="padding:8px; border:1px solid #ddd; font-weight:bold;">${s.label}</td>
+                        <td style="padding:8px; border:1px solid #ddd;"></td>
+                        <td style="padding:8px; border:1px solid #ddd; text-align:center; ${s.peak !== 'N/A' ? 'background-color:' : ''}" class="${s.peak !== 'N/A' ? getVcrClass(s.peak) : ''}">${formatVcr(s.peak)}</td>
+                        <td style="padding:8px; border:1px solid #ddd; text-align:center; ${s.offPeak !== 'N/A' ? 'background-color:' : ''}" class="${s.offPeak !== 'N/A' ? getVcrClass(s.offPeak) : ''}">${formatVcr(s.offPeak)}</td>
+                    </tr>
+                `).join('')}
+            </table>
+        `;
+
+        contentElement.innerHTML = html;
+        section.open = true;
     }
 </script>
 
